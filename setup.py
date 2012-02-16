@@ -8,7 +8,7 @@ setup(
     description='Swift middleware to authenticate against CloudStack',
     classifiers=['Programming Language :: Python'],
     keywords='cs_auth auth authentication openstack cloudstack',
-    author='Cloudops / Will Stevens (swill)',
+    author='CloudOps / Will Stevens (swill)',
     author_email='wstevens@syntenic.com',
     packages=find_packages(),
     entry_points={
