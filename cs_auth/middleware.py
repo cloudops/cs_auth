@@ -60,7 +60,7 @@ class CloudstackAuth(object):
         cs_api_url = http://127.0.0.1:8080/client/api
         cs_admin_apikey = <admin user's apikey>
         cs_admin_secretkey = <admin user's secretkey>
-        swift_storage_url = http://127.0.0.1
+        swift_storage_url = http://127.0.0.1:8080
 
 
     USAGE:
@@ -202,7 +202,7 @@ class CloudstackAuth(object):
                                     'expires':expires
                                 })
                                 self.logger.debug('created identity: %s' % identity)
-                                account_url = '%s:%s/v1/%s_%s' % (self.storage_url, self.conf['bind_port'], self.reseller_prefix, quote(user['account']))
+                                account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
                                 # add to memcache so it can be referenced later
                                 memcache_client = cache_from_env(env)
                                 if memcache_client:
