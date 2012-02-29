@@ -120,8 +120,6 @@ class CloudstackAuth(object):
 
     def __call__(self, env, start_response):
         self.logger.debug('Initialise cs_auth middleware')
-       
-        #self.logger.debug('--- env ---: %s' % env)
  
         # Handle s3 connections first because s3 has a unique format/use for the 'HTTP_X_AUTH_TOKEN'.
         s3 = env.get('HTTP_AUTHORIZATION', None)
