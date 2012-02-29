@@ -9,7 +9,7 @@ setup(
     classifiers=['Programming Language :: Python'],
     keywords='cs_auth auth authentication openstack cloudstack',
     author='CloudOps / Will Stevens (swill)',
-    author_email='wstevens@syntenic.com',
+    author_email='wstevens@cloudops.com',
     packages=find_packages(),
     entry_points={
         'paste.filter_factory': [

@@ -57,7 +57,7 @@ class CloudstackAuth(object):
 
         [filter:cs_auth]
         use = egg:cs_auth#cs_auth
-        cs_api_url = http://127.0.0.1:8080/client/api
+        cs_api_url = http://127.0.0.1:8081/client/api
         cs_admin_apikey = <admin user's apikey>
         cs_admin_secretkey = <admin user's secretkey>
         swift_storage_url = http://127.0.0.1:8080
@@ -370,7 +370,7 @@ class CloudstackAPI(object):
     
     """
     
-    def __init__(self, host='http://127.0.0.1:8080/client/api', api_key=None, secret_key=None):        
+    def __init__(self, host=None, api_key=None, secret_key=None):        
         self.host = host
         self.api_key = api_key
         self.secret_key = secret_key
