@@ -1,0 +1,67 @@
+Swift authentication via the Cloudstack API.
+    
+SETUP:
+------
+Add 'cs_auth' to your pipeline:
+
+    [pipeline:main]
+    pipeline = catch_errors cache cs_auth proxy-server
+
+Optional - To add support for s3 calls, change the above to:
+
+    [pipeline:main]
+    pipeline = catch_errors cache swift3 cs_auth proxy-server
+    
+    [filter:swift3]
+    use = egg:swift#swift3
+
+Add account auto creation to the proxy-server.
+
+    [app:proxy-server]
+    account_autocreate = true
+
+
+Add a filter for 'cs_auth':
+
+    [filter:cs_auth]
+    use = egg:cs_auth#cs_auth
+    cs_api_url = http://127.0.0.1:8081/client/api
+    cs_admin_apikey = <admin user's apikey>
+    cs_admin_secretkey = <admin user's secretkey>
+    swift_storage_url = http://127.0.0.1:8080
+
+
+USAGE:
+------    
+(for more detailed usage, check test-swift.sh)
+
+Curl:
+-----
+Request for authentication
+curl -v -H "X-Auth-User: $cloudstack_username" -H "X-Auth-Key: $cloudstack_apikey" http://127.0.0.1:8080/v1.0
+returns: $cloudstack_auth_token and $cloudstack_swift_storage_url
+
+Request container list
+curl -v -X GET -H "X-Auth-Token: $cloudstack_auth_token" $cloudstack_swift_storage_url
+
+
+Swift CLI:
+----------
+Request status
+swift -v -A http://127.0.0.1:8080/v1.0 -U $cloudstack_username -K $cloudstack_apikey stat
+
+
+S3 API:
+-------
+Requires the optional step in SETUP
+(example uses the python boto lib)
+
+from boto.s3.connection import S3Connection, OrdinaryCallingFormat
+
+conn = S3Connection(aws_access_key_id=cloudstack_apikey,
+                    aws_secret_access_key=cloudstack_secretkey,
+                    host='127.0.0.1',
+                    port=8080,
+                    is_secure=False,
+                    calling_format=OrdinaryCallingFormat())
+bucket = conn.create_bucket('sample_bucket')
