@@ -31,19 +31,21 @@ from datetime import datetime
 class CloudstackAuth(object):
     """
     Swift authentication via the Cloudstack API.
-	
+
+    ------
     SETUP:
     ------
-    Add 'cs_auth' to your pipeline:
+    File: proxy-server.conf
+    Add 'cs_auth' (and 'cache') to your pipeline:
 
         [pipeline:main]
         pipeline = catch_errors cache cs_auth proxy-server
 
-    Optional - To add support for s3 calls, change the above to:
+    Optional S3 Integration - To add support for s3 calls, change the above to:
 
         [pipeline:main]
         pipeline = catch_errors cache swift3 cs_auth proxy-server
-        
+
         [filter:swift3]
         use = egg:swift#swift3
 
@@ -63,9 +65,9 @@ class CloudstackAuth(object):
         swift_storage_url = http://127.0.0.1:8080
 
 
+    ------
     USAGE:
-    ------    
-    (for more detailed usage, check test-swift.sh)
+    ------
 
     Curl:
     -----
@@ -87,9 +89,9 @@ class CloudstackAuth(object):
     -------
     Requires the optional step in SETUP
     (example uses the python boto lib)
-    
+
     from boto.s3.connection import S3Connection, OrdinaryCallingFormat
-    
+
     conn = S3Connection(aws_access_key_id=cloudstack_apikey,
                         aws_secret_access_key=cloudstack_secretkey,
                         host='127.0.0.1',
