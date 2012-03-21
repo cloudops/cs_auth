@@ -317,6 +317,7 @@ class CloudstackAuth(object):
             return HTTPNotFound(request=req)
 
         if not _account or not _account.startswith(self.reseller_prefix):
+            self.logger.debug('denied because of reseller prefix')
             return self.denied_response(req)
 
         # Remove the reseller_prefix from the account.
@@ -324,6 +325,8 @@ class CloudstackAuth(object):
             account = _account[len(self.reseller_prefix)+1:]
         else:
             account = _account
+            
+        self.logger.debug('we have account: %s' % account)
         
         user_roles = identity.get('roles', [])
 
