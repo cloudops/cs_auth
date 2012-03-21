@@ -108,7 +108,7 @@ class CloudstackAuth(object):
         self.app = app
         self.conf = conf
         self.logger = get_logger(conf, log_route='cs_auth')
-        self.reseller_prefix = conf.get('reseller_prefix', 'cs').strip()
+        self.reseller_prefix = conf.get('reseller_prefix', '').strip()
         self.cs_roles = ('cs_user_role', 'cs_global_admin_role', 'cs_domain_admin_role') # ORDER IS IMPORTANT: mapping to cs accounttype.
         self.cs_api_url = conf.get('cs_api_url').strip()
         self.cs_admin_apikey = conf.get('cs_admin_apikey').strip()
@@ -148,7 +148,10 @@ class CloudstackAuth(object):
                                 })
                                 self.logger.debug('valid s3 identity: %s' % identity)
                                 # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
-                                env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, user['account']))                   
+                                if self.reseller_prefix != '':
+                                    env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, user['account']))
+                                else:
+                                    env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (user['account']))        
                                 memcache_client = cache_from_env(env)
                                 if memcache_client:
                                     memcache_client.set('cs_token/%s' % token,
@@ -202,7 +205,10 @@ class CloudstackAuth(object):
                                     'expires':expires
                                 })
                                 self.logger.debug('created identity: %s' % identity)
-                                account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
+                                if self.reseller_prefix != '':
+                                    account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
+                                else:
+                                    account_url = '%s/v1/%s' % (self.storage_url, quote(user['account']))
                                 # add to memcache so it can be referenced later
                                 memcache_client = cache_from_env(env)
                                 if memcache_client:
@@ -314,7 +320,10 @@ class CloudstackAuth(object):
             return self.denied_response(req)
 
         # Remove the reseller_prefix from the account.
-        account = _account[len(self.reseller_prefix)+1:]
+        if self.reseller_prefix != '':
+            account = _account[len(self.reseller_prefix)+1:]
+        else:
+            account = _account
         
         user_roles = identity.get('roles', [])
 
