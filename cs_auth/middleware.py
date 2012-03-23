@@ -174,12 +174,12 @@ class CloudstackAuth(object):
         req = Request(env)
         if not s3:
             try:
-                path_segs = split_path(req.path_info, minsegs=1, maxsegs=3, rest_with_last=True)
+                auth_url_piece, rest_of_url = split_path(req.path_info, minsegs=1, maxsegs=2, rest_with_last=True)
             except ValueError:
                 return HTTPNotFound(request=req)
 
             # Check if the request is for authentication (to get a token).
-            if path_segs[0] in ('auth', 'v1.0'):
+            if auth_url_piece in ('auth', 'v1.0'): # valid auth urls
                 self.logger.debug('Received an authentication request')
                 auth_user = env.get('HTTP_X_AUTH_USER', None)
                 auth_key = env.get('HTTP_X_AUTH_KEY', None)
@@ -312,7 +312,7 @@ class CloudstackAuth(object):
         identity = env.get('cloudstack.identity', {})
 
         try:
-            version, _account, container, obj = split_path(req.path, 1, 4, True)
+            version, _account, container, obj = split_path(req.path, minsegs=1, maxsegs=4, rest_with_last=True)
         except ValueError:
             return HTTPNotFound(request=req)
 
@@ -393,13 +393,10 @@ class CloudstackAPI(object):
             params['apiKey'] = self.api_key
 
             # build the query string
-            query_params = map(lambda (k,v):k+"="+quote(str(v)), params.items())
-            query_string = "&".join(query_params)
+            query_string = "&".join(map(lambda (k,v):k+"="+quote(str(v)), params.items()))
             
             # build signature
-            query_params.sort()
-            signature_string = "&".join(query_params).lower()
-            signature = quote(base64.b64encode(hmac.new(self.secret_key, signature_string, hashlib.sha1).digest()))
+            signature = quote(base64.b64encode(hmac.new(self.secret_key, "&".join(sorted(map(lambda (k,v):k.lower()+"="+quote(str(v)).lower(), params.items()))), hashlib.sha1).digest()))
 
             # final query string...
             url = self.host+"?"+query_string+"&signature="+signature
