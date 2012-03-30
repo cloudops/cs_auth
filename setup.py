@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from setuptools import setup, find_packages
-from swift_usage import __version__ as version
+from cs_auth import __version__ as version
 
 name = 'cs_auth'
 
