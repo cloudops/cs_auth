@@ -125,7 +125,6 @@ class CloudstackAuth(object):
     def __call__(self, env, start_response):
         self.logger.debug('In cs_auth middleware')
         identity = None # the identity we are trying to populate
-        token = None # this is the token that will be used as their general id
  
         # Handle s3 connections first because s3 has a unique format/use for the 'HTTP_X_AUTH_TOKEN'.
         s3 = env.get('HTTP_AUTHORIZATION', None)
@@ -135,21 +134,25 @@ class CloudstackAuth(object):
                 # check if we have cached data to validate this request instead of hitting cloudstack.
                 memcache_client = cache_from_env(env)
                 memcache_result = memcache_client.get('cs_s3_auth/%s' % s3_apikey)
+                valid_cache = False
+                data = None
                 if memcache_result and self.cs_cache_timeout > 0:
                     expires, data = memcache_result
                     if expires > time():
-                        self.logger.debug('Validating the S3 request via the cached identity')
-                        s3_token = base64.urlsafe_b64decode(env.get('HTTP_X_AUTH_TOKEN', '')).encode("utf-8")
-                        if s3_signature == base64.b64encode(hmac.new(data['secret'], s3_token, hashlib.sha1).digest()):
-                            self.logger.debug('Using cached S3 identity')
-                            identity = data['identity']
-                            token = identity['token'] # this just simplifies the logical flow, its not really used in this case.
-                            
-                            # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
-                            if self.reseller_prefix != '':
-                                env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, identity['account']))
-                            else:
-                                env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (identity['account']))
+                        valid_cache = True
+                if valid_cache:
+                    self.logger.debug('Validating the S3 request via the cached identity')
+                    s3_token = base64.urlsafe_b64decode(env.get('HTTP_X_AUTH_TOKEN', '')).encode("utf-8")
+                    if s3_signature == base64.b64encode(hmac.new(data.get('secret', ''), s3_token, hashlib.sha1).digest()):
+                        self.logger.debug('Using cached S3 identity')
+                        identity = data.get('identity', None)
+                        token = identity.get('token', None) # this just simplifies the logical flow, its not really used in this case.
+                        
+                        # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
+                        if self.reseller_prefix != '':
+                            env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, identity.get('account', '')))
+                        else:
+                            env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (identity.get('account', '')))
                 else: # hit cloudstack and populate memcached if valid request
                     user_list = self.cs_api.request(dict({'command':'listUsers'}))
                     if user_list:
@@ -213,18 +216,22 @@ class CloudstackAuth(object):
                     # check if we have this user and key cached.
                     memcache_client = cache_from_env(env)
                     memcache_result = memcache_client.get('cs_auth/%s/%s' % (auth_user, auth_key))
+                    valid_cache = False
+                    data = None
                     if memcache_result and self.cs_cache_timeout > 0:
                         expires, data = memcache_result
                         if expires > time():
-                            self.logger.debug('Using cached identity via creds')
-                            identity = data
-                            self.logger.debug("Using identity: %r" % (identity))
-                            token = identity['token']
-                            req.response = Response(request=req,
-                                                    headers={'x-auth-token':token, 
-                                                             'x-storage-token':token,
-                                                             'x-storage-url':identity['account_url']})
-                            return req.response(env, start_response)
+                            valid_cache = True
+                    if valid_cache:
+                        self.logger.debug('Using cached identity via creds')
+                        identity = data
+                        self.logger.debug("Using identity: %r" % (identity))
+                        token = identity.get('token', None)
+                        req.response = Response(request=req,
+                                                headers={'x-auth-token':token, 
+                                                         'x-storage-token':token,
+                                                         'x-storage-url':identity.get('account_url', None)})
+                        return req.response(env, start_response)
                     else: # hit cloudstack for the details.
                         user_list = self.cs_api.request(dict({'command':'listUsers', 'username':auth_user}))
                         if user_list:
@@ -277,7 +284,7 @@ class CloudstackAuth(object):
             else:
                 token = env.get('HTTP_X_AUTH_TOKEN', env.get('HTTP_X_STORAGE_TOKEN'))
         
-        if not token:
+        if not identity and not env.get('HTTP_X_AUTH_TOKEN', env.get('HTTP_X_STORAGE_TOKEN', None)):
             # this is an anonymous request.  pass it through for authorize to verify.
             self.logger.debug('Passing through anonymous request')
             env['swift.authorize'] = self.authorize
