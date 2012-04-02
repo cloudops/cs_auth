@@ -63,6 +63,8 @@ class CloudstackAuth(object):
         cs_admin_apikey = <admin user's apikey>
         cs_admin_secretkey = <admin user's secretkey>
         swift_storage_url = http://127.0.0.1:8080
+        #cs_cache_timeout = 86400
+        #allowed_sync_hosts = 127.0.0.1#,127.0.0.2,127.0.0.3
 
 
     ------
@@ -121,56 +123,80 @@ class CloudstackAuth(object):
             if h.strip()]
 
     def __call__(self, env, start_response):
-        self.logger.debug('Initialise cs_auth middleware')
+        self.logger.debug('In cs_auth middleware')
+        identity = None # the identity we are trying to populate
  
         # Handle s3 connections first because s3 has a unique format/use for the 'HTTP_X_AUTH_TOKEN'.
         s3 = env.get('HTTP_AUTHORIZATION', None)
         if s3 and s3.startswith('AWS'):
             s3_apikey, s3_signature = s3.split(' ')[1].rsplit(':', 1)[:]
             if s3_apikey and s3_signature:
-                user_list = self.cs_api.request(dict({'command':'listUsers'}))
-                if user_list:
-                    for user in user_list['user']:
-                        if user['state'] == 'enabled' and 'apikey' in user and user['apikey'] == s3_apikey:
-                            # At this point we have found a matching user.  Authenticate them.
-                            s3_token = base64.urlsafe_b64decode(env.get('HTTP_X_AUTH_TOKEN', '')).encode("utf-8")
-                            if s3_signature == base64.b64encode(hmac.new(user['secretkey'], s3_token, hashlib.sha1).digest()):
-                                expires = time() + self.cs_cache_timeout
-                                timeout = self.cs_cache_timeout
-                                token = hashlib.sha224('%s%s' % (user['secretkey'], user['apikey'])).hexdigest()
-                                identity = dict({
-                                    'username':user['username'],
-                                    'account':user['account'],
-                                    'token':token,
-                                    'domain':dict({'id':user['domainid'], 'name':user['domain']}),
-                                    'roles':[self.cs_roles[user['accounttype']], user['account']],
-                                    'expires':expires
-                                })
-                                self.logger.debug('valid s3 identity: %s' % identity)
-                                # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
-                                if self.reseller_prefix != '':
-                                    env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, user['account']))
-                                else:
-                                    env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (user['account']))        
-                                memcache_client = cache_from_env(env)
-                                if memcache_client:
-                                    memcache_client.set('cs_token/%s' % token,
-                                                        (expires, identity),
-                                                        timeout=timeout)
+                # check if we have cached data to validate this request instead of hitting cloudstack.
+                memcache_client = cache_from_env(env)
+                memcache_result = memcache_client.get('cs_s3_auth/%s' % s3_apikey)
+                if memcache_result and self.cs_cache_timeout > 0:
+                    expires, data = memcache_result
+                    if expires > time():
+                        self.logger.debug('Validating the S3 request via the cached identity')
+                        s3_token = base64.urlsafe_b64decode(env.get('HTTP_X_AUTH_TOKEN', '')).encode("utf-8")
+                        if s3_signature == base64.b64encode(hmac.new(data['secret'], s3_token, hashlib.sha1).digest()):
+                            self.logger.debug('Using cached S3 identity')
+                            identity = data['identity']
+                            token = identity['token'] # this just simplifies the logical flow, its not really used in this case.
+                            
+                            # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
+                            if self.reseller_prefix != '':
+                                env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, identity['account']))
                             else:
-                                self.logger.debug('S3 credentials are not valid.')
-                                env['swift.authorize'] = self.denied_response
-                                return self.app(env, start_response)
-                else:
-                    self.logger.debug('errors: %s' % self.cs_api.errors)
-                    env['swift.authorize'] = self.denied_response
-                    return self.app(env, start_response)
+                                env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (identity['account']))
+                else: # hit cloudstack and populate memcached if valid request
+                    user_list = self.cs_api.request(dict({'command':'listUsers'}))
+                    if user_list:
+                        for user in user_list['user']:
+                            if user['state'] == 'enabled' and 'apikey' in user and user['apikey'] == s3_apikey:
+                                # At this point we have found a matching user.  Authenticate them.
+                                s3_token = base64.urlsafe_b64decode(env.get('HTTP_X_AUTH_TOKEN', '')).encode("utf-8")
+                                if s3_signature == base64.b64encode(hmac.new(user['secretkey'], s3_token, hashlib.sha1).digest()):
+                                    expires = time() + self.cs_cache_timeout
+                                    timeout = self.cs_cache_timeout
+                                    token = hashlib.sha224('%s%s' % (user['secretkey'], user['apikey'])).hexdigest()
+                                    if self.reseller_prefix != '':
+                                        account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
+                                    else:
+                                        account_url = '%s/v1/%s' % (self.storage_url, quote(user['account']))
+                                    identity = dict({
+                                        'username':user['username'],
+                                        'account':user['account'],
+                                        'token':token,
+                                        'account_url':account_url,
+                                        'domain':dict({'id':user['domainid'], 'name':user['domain']}),
+                                        'roles':[self.cs_roles[user['accounttype']], user['account']],
+                                        'expires':expires
+                                    })
+                                    self.logger.debug('Creating S3 identity')
+                                    # The swift3 middleware sets env['PATH_INFO'] to '/v1/<aws_secret_key>', we need to map it to the cloudstack account.
+                                    if self.reseller_prefix != '':
+                                        env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s_%s' % (self.reseller_prefix, user['account']))
+                                    else:
+                                        env['PATH_INFO'] = env['PATH_INFO'].replace(s3_apikey, '%s' % (user['account']))        
+                                    memcache_client = cache_from_env(env)
+                                    if memcache_client:
+                                        memcache_client.set('cs_s3_auth/%s' % s3_apikey, (expires, dict({'secret':user['secretkey'], 'identity':identity})), timeout=timeout)
+                                        memcache_client.set('cs_token/%s' % token, (expires, identity), timeout=timeout)
+                                else:
+                                    self.logger.debug('S3 credentials are not valid')
+                                    env['swift.authorize'] = self.denied_response
+                                    return self.app(env, start_response)
+                    else:
+                        self.logger.debug('Errors: %s' % self.cs_api.errors)
+                        env['swift.authorize'] = self.denied_response
+                        return self.app(env, start_response)
             else:
-                self.logger.debug('Invalid format of credentials')
+                self.logger.debug('Invalid credential format')
                 env['swift.authorize'] = self.denied_response
                 return self.app(env, start_response)
         
-        # Handle the request for authenication otherwise use the token.
+        # If it is not an S3 call, handle the request for authenication, otherwise, use the token.
         req = Request(env)
         if not s3:
             try:
@@ -180,55 +206,69 @@ class CloudstackAuth(object):
 
             # Check if the request is for authentication (to get a token).
             if auth_url_piece in ('auth', 'v1.0'): # valid auth urls
-                self.logger.debug('Received an authentication request')
                 auth_user = env.get('HTTP_X_AUTH_USER', None)
                 auth_key = env.get('HTTP_X_AUTH_KEY', None)
                 if auth_user and auth_key:
-                    self.logger.debug('We have a user and key, validating...')
-                    user_list = self.cs_api.request(dict({'command':'listUsers', 'username':auth_user}))
-                    if user_list:
-                        for user in user_list['user']:
-                            if user['state'] == 'enabled' and 'apikey' in user and user['apikey'] == auth_key:
-                                token = hashlib.sha224('%s%s' % (user['secretkey'], user['apikey'])).hexdigest()
-                                if env.get('HTTP_X_AUTH_TTL', None):
-                                    expires = time() + int(env.get('HTTP_X_AUTH_TTL'))
-                                    timeout = int(env.get('HTTP_X_AUTH_TTL'))
-                                else:
-                                    expires = time() + self.cs_cache_timeout
-                                    timeout = self.cs_cache_timeout
-                                identity = dict({
-                                    'username':user['username'],
-                                    'account':user['account'],
-                                    'token':token,
-                                    'domain':dict({'id':user['domainid'], 'name':user['domain']}),
-                                    'roles':[self.cs_roles[user['accounttype']], user['account']],
-                                    'expires':expires
-                                })
-                                self.logger.debug('created identity: %s' % identity)
-                                if self.reseller_prefix != '':
-                                    account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
-                                else:
-                                    account_url = '%s/v1/%s' % (self.storage_url, quote(user['account']))
-                                # add to memcache so it can be referenced later
-                                memcache_client = cache_from_env(env)
-                                if memcache_client:
-                                    memcache_client.set('cs_token/%s' % token,
-                                                        (expires, identity),
-                                                        timeout=timeout)
-                                req.response = Response(request=req,
-                                                        headers={'x-auth-token':token, 
-                                                                 'x-storage-token':token,
-                                                                 'x-storage-url':account_url})
-                                return req.response(env, start_response)
+                    # check if we have this user and key cached.
+                    memcache_client = cache_from_env(env)
+                    memcache_result = memcache_client.get('cs_auth/%s/%s' % (auth_user, auth_key))
+                    if memcache_result and self.cs_cache_timeout > 0:
+                        expires, data = memcache_result
+                        if expires > time():
+                            self.logger.debug('Using cached identity via creds')
+                            identity = data
+                            self.logger.debug("Using identity: %r" % (identity))
+                            token = identity['token']
+                            req.response = Response(request=req,
+                                                    headers={'x-auth-token':token, 
+                                                             'x-storage-token':token,
+                                                             'x-storage-url':identity['account_url']})
+                            return req.response(env, start_response)
+                    else: # hit cloudstack for the details.
+                        user_list = self.cs_api.request(dict({'command':'listUsers', 'username':auth_user}))
+                        if user_list:
+                            for user in user_list['user']:
+                                if user['state'] == 'enabled' and 'apikey' in user and user['apikey'] == auth_key:
+                                    token = hashlib.sha224('%s%s' % (user['secretkey'], user['apikey'])).hexdigest()
+                                    if env.get('HTTP_X_AUTH_TTL', None):
+                                        expires = time() + int(env.get('HTTP_X_AUTH_TTL'))
+                                        timeout = int(env.get('HTTP_X_AUTH_TTL'))
+                                    else:
+                                        expires = time() + self.cs_cache_timeout
+                                        timeout = self.cs_cache_timeout
+                                    if self.reseller_prefix != '':
+                                        account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
+                                    else:
+                                        account_url = '%s/v1/%s' % (self.storage_url, quote(user['account']))
+                                    identity = dict({
+                                        'username':user['username'],
+                                        'account':user['account'],
+                                        'token':token,
+                                        'account_url':account_url,
+                                        'domain':dict({'id':user['domainid'], 'name':user['domain']}),
+                                        'roles':[self.cs_roles[user['accounttype']], user['account']],
+                                        'expires':expires
+                                    })
+                                    self.logger.debug('Created identity: %s' % identity)
+                                    # add to memcache so it can be referenced later
+                                    memcache_client = cache_from_env(env)
+                                    if memcache_client:
+                                        memcache_client.set('cs_auth/%s/%s' % (auth_user, auth_key), (expires, identity), timeout=timeout)
+                                        memcache_client.set('cs_token/%s' % token, (expires, identity), timeout=timeout)
+                                    req.response = Response(request=req,
+                                                            headers={'x-auth-token':token, 
+                                                                     'x-storage-token':token,
+                                                                     'x-storage-url':account_url})
+                                    return req.response(env, start_response)
                     
-                        # if we get here the user was not valid, so fail...
-                        self.logger.debug('Not a valid user and key pair')
-                        env['swift.authorize'] = self.denied_response
-                        return self.app(env, start_response)
-                    else:
-                        self.logger.debug('errors: %s' % self.cs_api.errors)
-                        env['swift.authorize'] = self.denied_response
-                        return self.app(env, start_response)
+                            # if we get here the user was not valid, so fail...
+                            self.logger.debug('Not a valid user and key pair')
+                            env['swift.authorize'] = self.denied_response
+                            return self.app(env, start_response)
+                        else:
+                            self.logger.debug('Errors: %s' % self.cs_api.errors)
+                            env['swift.authorize'] = self.denied_response
+                            return self.app(env, start_response)
                 else:
                     self.logger.debug('Credentials missing')
                     env['swift.authorize'] = self.denied_response
@@ -243,30 +283,27 @@ class CloudstackAuth(object):
             env['swift.clean_acl'] = clean_acl
             return self.app(env, start_response)
 
-        self.logger.debug('Got token: %s' % (token))
-
-        identity = None
+        # setup a memcache client for the following.
         memcache_client = cache_from_env(env)
-        memcache_key = 'cs_token/%s' % (token)
-        memcache_result = memcache_client.get(memcache_key)
-        if memcache_result:
-            expires, _identity = memcache_result
-            if expires > time():
-                self.logger.debug('Getting identity info from memcache')
-                identity = _identity
+        
+        if not identity:
+            memcache_result = memcache_client.get('cs_token/%s' % token)
+            if memcache_result and self.cs_cache_timeout > 0:
+                expires, _identity = memcache_result
+                if expires > time():
+                    self.logger.debug('Using cached identity via token')
+                    identity = _identity
 
         if not identity:
-            self.logger.debug("No memcache, validate via cloudstack")
+            self.logger.debug("No cached identity, validate token via cloudstack")
             identity = self._cloudstack_validate_token(token)
             if identity and memcache_client:
                 expires = identity['expires']
-                memcache_client.set(memcache_key,
-                                    (expires, identity),
-                                    timeout=expires - time())
+                memcache_client.set('cs_token/%s' % token, (expires, identity), timeout=expires - time())
                 ts = str(datetime.fromtimestamp(expires))
                 self.logger.debug('Setting memcache expiration to %s' % ts)
             else:  # if we didn't get identity it means there was an error.
-                self.logger.debug('Could not retieve an identity for this token.');
+                self.logger.debug('No identity for this token');
                 env['swift.authorize'] = self.denied_response
                 return self.app(env, start_response)
 
@@ -291,19 +328,24 @@ class CloudstackAuth(object):
         if user_list:
             for user in user_list['user']:
                 if user['state'] == 'enabled' and 'secretkey' in user and hashlib.sha224('%s%s' % (user['secretkey'], user['apikey'])).hexdigest() == token_claim:
+                    if self.reseller_prefix != '':
+                        account_url = '%s/v1/%s_%s' % (self.storage_url, self.reseller_prefix, quote(user['account']))
+                    else:
+                        account_url = '%s/v1/%s' % (self.storage_url, quote(user['account']))
                     expires = time() + self.cs_cache_timeout
                     identity = dict({
                         'username':user['username'],
                         'account':user['account'],
                         'token':token_claim,
+                        'account_url':account_url,
                         'domain':dict({'id':user['domainid'], 'name':user['domain']}),
                         'roles':[self.cs_roles[user['accounttype']], user['account']],
                         'expires':expires
                     })
-                    self.logger.debug('validated identity: %s' % identity)
+                    self.logger.debug('Using identity from cloudstack via token')
                     return identity
         else:
-            self.logger.debug('errors: %s' % self.cs_api.errors)
+            self.logger.debug('Errors: %s' % self.cs_api.errors)
         
         return identity
 
@@ -335,21 +377,21 @@ class CloudstackAuth(object):
         # Allow container sync
         if (req.environ.get('swift_sync_key') and req.environ['swift_sync_key'] == req.headers.get('x-container-sync-key', None) and
            'x-timestamp' in req.headers and (req.remote_addr in self.allowed_sync_hosts or get_remote_client(req) in self.allowed_sync_hosts)):
-            self.logger.debug('allowing container-sync')
+            self.logger.debug('Allowing container-sync')
             return None
 
         # Check if Referrer allow it
         referrers, groups = parse_acl(getattr(req, 'acl', None))
         if referrer_allowed(req.referer, referrers):
             if obj or '.rlistings' in groups:
-                self.logger.debug('authorizing via ACL')
+                self.logger.debug('Authorizing via ACL')
                 return None
             return self.denied_response(req)
 
         # Check if we have the group in the user_roles and allow if we do
         for role in user_roles:
             if role in groups:
-                self.logger.debug('user has role %s, allowing via ACL' % (role))
+                self.logger.debug('User has role %s, allowing via ACL' % (role))
                 return None
 
         # This user is not authorized, deny request.
