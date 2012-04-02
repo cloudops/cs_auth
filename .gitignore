@@ -1,2 +1,5 @@
+cs_auth-*
+deb_dist*
+dist*
 cs_auth.egg-info
 *.pyc
