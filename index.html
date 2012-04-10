@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+    <meta charset='utf-8' />
+    <meta http-equiv="X-UA-Compatible" content="chrome=1" />
+    <meta name="description" content="cs_auth : Swift Auth Middleware backed by the Cloudstack API." />
+
+    <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
+
+    <title>cs_auth</title>
+  </head>
+
+  <body>
+
+    <!-- HEADER -->
+    <div id="header_wrap" class="outer">
+        <header class="inner">
+          <a id="forkme_banner" href="https://github.com/cloudops/cs_auth">Fork Me on GitHub</a>
+
+          <h1 id="project_title">cs_auth</h1>
+          <h2 id="project_tagline">Swift Auth Middleware backed by the Cloudstack API.</h2>
+
+          <section id="downloads">
+            <a class="zip_download_link" href="https://github.com/cloudops/cs_auth/zipball/master">Download this project as a .zip file</a>
+            <a class="tar_download_link" href="https://github.com/cloudops/cs_auth/tarball/master">Download this project as a tar.gz file</a>
+          </section>
+        </header>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div id="main_content_wrap" class="outer">
+      <section id="main_content" class="inner">
+        <p>This project is contributed by <a href="www.cloudops.com">www.cloudops.com</a></p>
+
+<h2>SETUP</h2>
+
+<p>In file: <code>/etc/swift/proxy-server.conf</code></p>
+
+<p>Add 'cs_auth' (and 'cache') to your pipeline:</p>
+
+<pre><code>    [pipeline:main]
+    pipeline = catch_errors cache cs_auth proxy-server
+</code></pre>
+
+<p>Optional S3 Integration - To add support for s3 calls, change the above to:</p>
+
+<pre><code>    [pipeline:main]
+    pipeline = catch_errors cache swift3 cs_auth proxy-server
+
+    [filter:swift3]
+    use = egg:swift#swift3
+</code></pre>
+
+<p>Add account auto creation to the proxy-server.</p>
+
+<pre><code>    [app:proxy-server]
+    account_autocreate = true
+</code></pre>
+
+<p>Add a filter for 'cs_auth':</p>
+
+<pre><code>    [filter:cs_auth]
+    use = egg:cs_auth#cs_auth
+    cs_api_url = <a href="http://127.0.0.1:8081/client/api">http://127.0.0.1:8081/client/api</a>
+    cs_admin_apikey = &lt;admin user's apikey&gt;
+    cs_admin_secretkey = &lt;admin user's secretkey&gt;
+    swift_storage_url = <a href="http://127.0.0.1:8080">http://127.0.0.1:8080</a>
+</code></pre>
+
+<p><br><br></p>
+
+<h2>USAGE</h2>
+
+<h3>Curl</h3>
+
+<p>Request for authentication</p>
+
+<pre><code>curl -v -H "X-Auth-User: $cloudstack_username" -H "X-Auth-Key: $cloudstack_apikey" <a href="http://127.0.0.1:8080/v1.0">http://127.0.0.1:8080/v1.0</a>
+</code></pre>
+
+<p>returns: $cloudstack_auth_token and $cloudstack_swift_storage_url</p>
+
+<p>Request container list</p>
+
+<pre><code>curl -v -X GET -H "X-Auth-Token: $cloudstack_auth_token" $cloudstack_swift_storage_url
+</code></pre>
+
+<p><br></p>
+
+<h3>Swift CLI</h3>
+
+<p>Request status</p>
+
+<pre><code>swift -v -A <a href="http://127.0.0.1:8080/v1.0">http://127.0.0.1:8080/v1.0</a> -U $cloudstack_username -K $cloudstack_apikey stat
+</code></pre>
+
+<p><br></p>
+
+<h3>S3 API</h3>
+
+<p>Requires the optional step in SETUP<br>
+(example uses the python boto lib)</p>
+
+<pre><code>from boto.s3.connection import S3Connection, OrdinaryCallingFormat
+
+conn = S3Connection(aws_access_key_id=cloudstack_apikey,
+                    aws_secret_access_key=cloudstack_secretkey,
+                    host='127.0.0.1',
+                    port=8080,
+                    is_secure=False,
+                    calling_format=OrdinaryCallingFormat())
+bucket = conn.create_bucket('sample_bucket')
+</code></pre>
+      </section>
+    </div>
+
+    <!-- FOOTER  -->
+    <div id="footer_wrap" class="outer">
+      <footer class="inner">
+        <p class="copyright">cs_auth maintained by <a href="https://github.com/cloudops">cloudops</a></p>
+        <p>Published with <a href="http://pages.github.com">GitHub Pages</a></p>
+      </footer>
+    </div>
+
+    
+
+  </body>
+</html>
