@@ -218,7 +218,7 @@ class CloudstackAuth(object):
                     memcache_result = memcache_client.get('cs_auth/%s/%s' % (auth_user, auth_key))
                     valid_cache = False
                     data = None
-                    if memcache_result and self.cs_cache_timeout > 0:
+                    if memcache_result and self.cs_cache_timeout > 0 and env.get('HTTP_X_AUTH_TTL', 1) > 0:
                         expires, data = memcache_result
                         if expires > time():
                             valid_cache = True
